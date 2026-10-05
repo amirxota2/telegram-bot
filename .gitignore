@@ -1,0 +1,7 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+data/*.dbrailway.exe
+railway.exe
+data/games.db
