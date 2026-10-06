@@ -3,6 +3,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -82,14 +83,9 @@ def get_total_pages():
 
 
 def get_category_page(page: int):
-    start = (
-        page * CATEGORIES_PER_PAGE
-    )
+    start = page * CATEGORIES_PER_PAGE
 
-    end = (
-        start
-        + CATEGORIES_PER_PAGE
-    )
+    end = start + CATEGORIES_PER_PAGE
 
     return GAME_CATEGORIES[start:end]
 
@@ -129,9 +125,7 @@ def category_keyboard(page: int = 0):
             row.append(
                 InlineKeyboardButton(
                     category_name,
-                    callback_data=(
-                        f"genre:{category_id}"
-                    ),
+                    callback_data=f"genre:{category_id}",
                 )
             )
 
@@ -144,9 +138,7 @@ def category_keyboard(page: int = 0):
         navigation.append(
             InlineKeyboardButton(
                 "⬅️ قبلی",
-                callback_data=(
-                    f"catpage:{page - 1}"
-                ),
+                callback_data=f"catpage:{page - 1}",
             )
         )
 
@@ -161,17 +153,13 @@ def category_keyboard(page: int = 0):
         navigation.append(
             InlineKeyboardButton(
                 "بعدی ➡️",
-                callback_data=(
-                    f"catpage:{page + 1}"
-                ),
+                callback_data=f"catpage:{page + 1}",
             )
         )
 
     keyboard.append(navigation)
 
-    return InlineKeyboardMarkup(
-        keyboard
-    )
+    return InlineKeyboardMarkup(keyboard)
 
 
 # =========================================================
@@ -292,9 +280,7 @@ async def category_selected(
         "",
     )
 
-    genre = get_category_name(
-        category_id
-    )
+    genre = get_category_name(category_id)
 
     user_sessions[user_id] = {
         "step": "enter_game",
@@ -306,7 +292,6 @@ async def category_selected(
         f"✅ دسته انتخاب شد:\n\n"
         f"{genre}\n\n"
         " پیشنهادی  بازی های 2026 🎮\n\n"
-        
         "• Civilization VI\n"
         "• The Witcher 3\n"
         "• Elden Ring"
@@ -356,9 +341,7 @@ async def choose_another_game(
 
     user_id = query.from_user.id
 
-    session = user_sessions.get(
-        user_id
-    )
+    session = user_sessions.get(user_id)
 
     if not session:
 
@@ -374,9 +357,7 @@ async def choose_another_game(
 
         return
 
-    genre = session.get(
-        "genre"
-    )
+    genre = session.get("genre")
 
     user_sessions[user_id] = {
         "step": "enter_game",
@@ -404,9 +385,27 @@ async def handle_message(
 
     user_id = update.effective_user.id
 
-    message = (
-        update.message.text.strip()
+    message = update.message.text.strip()
+
+    # =====================================================
+    # User Search Log
+    # =====================================================
+
+    username = update.effective_user.username or "بدون username"
+    first_name = update.effective_user.first_name or "بدون نام"
+
+    print(
+        f"🔎 SEARCH | "
+        f"user={first_name} | "
+        f"username=@{username} | "
+        f"id={user_id} | "
+        f"query={message}",
+        flush=True,
     )
+
+    # =====================================================
+    # Session
+    # =====================================================
 
     session = user_sessions.get(
         user_id
@@ -624,7 +623,8 @@ async def handle_message(
     except Exception as error:
 
         print(
-            f"Game error: {error}"
+            f"Game error: {error}",
+            flush=True,
         )
 
         await update.message.reply_text(
@@ -703,7 +703,8 @@ def main():
     )
 
     print(
-        "🤖 Game Agent Bot is running..."
+        "🤖 Game Agent Bot is running...",
+        flush=True,
     )
 
     app.run_polling()
