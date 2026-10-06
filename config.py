@@ -1,8 +1,6 @@
-```python
 import os
 
 from dotenv import load_dotenv
-
 
 load_dotenv()
 
@@ -20,5 +18,4 @@ QWEN_MODEL = os.getenv(
     "openrouter/free",
 )
 
-DATABASE_PATH = "games.db"
-```
+DATABASE_PATH = "/tmp/games.db"
