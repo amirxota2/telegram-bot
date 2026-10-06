@@ -1,192 +1,172 @@
-from datetime import datetime, timezone
+
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
-
+ 
 import requests
-
-from config import (
-    IGDB_BASE_URL,
-    REQUEST_TIMEOUT,
-    TWITCH_CLIENT_ID,
-    TWITCH_CLIENT_SECRET,
-    TWITCH_TOKEN_URL,
-)
-
-
+ 
+from config import REQUEST_TIMEOUT
+ 
+RAWG_BASE_URL = "https://api.rawg.io/api"
+RAWG_API_KEY = os.getenv("RAWG_API_KEY", "")
+ 
+# آیدی‌هایی که توی bot.py هست -> آیدی معادل در RAWG
+GENRE_MAP = {
+    4: 4,      # اکشن
+    31: 3,     # ماجراجویی
+    12: 5,     # RPG
+    15: 10,    # استراتژی
+    13: 14,    # شبیه‌سازی
+    14: 15,    # ورزشی
+    10: 1,     # مسابقه‌ای
+    5: 2,      # شوتر
+    6: 6,      # فایتینگ
+    9: 7,      # پازل
+    8: 83,     # پلتفرمر
+    32: 51,    # ایندی
+    33: 11,    # آرکید
+}
+ 
+PLATFORM_MAP = {
+    6: 4,      # PC
+    167: 187,  # PS5
+    48: 18,    # PS4
+    9: 16,     # PS3
+    169: 186,  # Xbox Series
+    49: 1,     # Xbox One
+    12: 14,    # Xbox 360
+    130: 7,    # Nintendo Switch
+    3: 6,      # Linux
+    14: 5,     # macOS
+    34: 21,    # Android
+    39: 3,     # iOS
+}
+ 
+ 
 class GameService:
-
+ 
     def __init__(self):
-
-        if not TWITCH_CLIENT_ID:
+ 
+        if not RAWG_API_KEY:
             raise ValueError(
-                "TWITCH_CLIENT_ID تنظیم نشده است."
+                "RAWG_API_KEY تنظیم نشده است."
             )
-
-        if not TWITCH_CLIENT_SECRET:
-            raise ValueError(
-                "TWITCH_CLIENT_SECRET تنظیم نشده است."
-            )
-
-        self.client_id = TWITCH_CLIENT_ID
-        self.client_secret = TWITCH_CLIENT_SECRET
-
-        self.access_token = None
-        self.token_expires_at = 0
-
-    # =========================================================
-    # AUTHENTICATION
-    # =========================================================
-
-    def _get_access_token(self):
-
-        now = datetime.now(
-            timezone.utc
-        ).timestamp()
-
-        if (
-            self.access_token
-            and now < self.token_expires_at - 60
-        ):
-            return self.access_token
-
-        response = requests.post(
-            TWITCH_TOKEN_URL,
-            params={
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "grant_type": "client_credentials",
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        self.access_token = data["access_token"]
-
-        expires_in = int(
-            data.get(
-                "expires_in",
-                3600,
-            )
-        )
-
-        self.token_expires_at = (
-            now + expires_in
-        )
-
-        return self.access_token
-
+ 
+        self.session = requests.Session()
+ 
     # =========================================================
     # RAW REQUEST
     # =========================================================
-
+ 
     def _request(
         self,
-        endpoint: str,
-        query: str,
-    ) -> list[dict[str, Any]]:
-
-        token = self._get_access_token()
-
-        headers = {
-            "Client-ID": self.client_id,
-            "Authorization": (
-                f"Bearer {token}"
-            ),
-            "Accept": "application/json",
-        }
-
-        url = (
-            f"{IGDB_BASE_URL}"
-            f"/{endpoint.lstrip('/')}"
-        )
-
-        response = requests.post(
-            url,
-            headers=headers,
-            data=query,
+        path: str,
+        params: dict | None = None,
+    ) -> Any:
+ 
+        query = {"key": RAWG_API_KEY}
+        query.update(params or {})
+ 
+        response = self.session.get(
+            f"{RAWG_BASE_URL}/{path.lstrip('/')}",
+            params=query,
             timeout=REQUEST_TIMEOUT,
         )
-
+ 
         response.raise_for_status()
-
+ 
         return response.json()
-
+ 
     # =========================================================
-    # GAME FIELDS
+    # NORMALIZE (خروجی RAWG -> همون فرمت قبلی)
     # =========================================================
-
-    GAME_FIELDS = """
-        id,
-        name,
-        slug,
-        summary,
-        storyline,
-        first_release_date,
-        rating,
-        rating_count,
-        aggregated_rating,
-        aggregated_rating_count,
-        total_rating,
-        total_rating_count,
-        genres.name,
-        platforms.id,
-        platforms.name,
-        platforms.abbreviation,
-        cover.image_id,
-        screenshots.image_id,
-        artworks.image_id,
-        involved_companies.company.name,
-        involved_companies.developer,
-        involved_companies.publisher,
-        websites.url,
-        websites.type,
-        websites.trusted,
-        external_games.name,
-        external_games.url,
-        external_games.external_game_source.name
-    """
-
-    # =========================================================
-    # HELPERS
-    # =========================================================
-
+ 
     @staticmethod
-    def _timestamp_for_year_start(
-        year: int,
-    ) -> int:
-
-        return int(
-            datetime(
-                year,
-                1,
-                1,
-                tzinfo=timezone.utc,
-            ).timestamp()
-        )
-
-    @staticmethod
-    def _timestamp_for_year_end(
-        year: int,
-    ) -> int:
-
-        return int(
-            datetime(
-                year,
-                12,
-                31,
-                23,
-                59,
-                59,
-                tzinfo=timezone.utc,
-            ).timestamp()
-        )
-
+    def _normalize(raw: dict) -> dict:
+ 
+        timestamp = None
+        released = raw.get("released")
+ 
+        if released:
+            try:
+                timestamp = int(
+                    datetime.strptime(
+                        released,
+                        "%Y-%m-%d",
+                    )
+                    .replace(tzinfo=timezone.utc)
+                    .timestamp()
+                )
+            except ValueError:
+                timestamp = None
+ 
+        rating = raw.get("rating") or 0
+ 
+        companies = []
+ 
+        for item in raw.get("developers") or []:
+            companies.append(
+                {
+                    "developer": True,
+                    "publisher": False,
+                    "company": {"name": item.get("name")},
+                }
+            )
+ 
+        for item in raw.get("publishers") or []:
+            companies.append(
+                {
+                    "developer": False,
+                    "publisher": True,
+                    "company": {"name": item.get("name")},
+                }
+            )
+ 
+        websites = []
+ 
+        if raw.get("website"):
+            websites.append(
+                {
+                    "url": raw["website"],
+                    "type": 1,
+                    "trusted": True,
+                }
+            )
+ 
+        platforms = []
+ 
+        for item in raw.get("platforms") or []:
+            platform = item.get("platform") or {}
+            platforms.append(
+                {
+                    "id": platform.get("id"),
+                    "name": platform.get("name"),
+                }
+            )
+ 
+        return {
+            "id": raw.get("id"),
+            "name": raw.get("name"),
+            "summary": raw.get("description_raw") or "",
+            "storyline": None,
+            "first_release_date": timestamp,
+            "rating": rating * 20 if rating else None,
+            "aggregated_rating": raw.get("metacritic"),
+            "genres": [
+                {"name": g.get("name")}
+                for g in raw.get("genres") or []
+            ],
+            "platforms": platforms,
+            "cover_url": raw.get("background_image"),
+            "involved_companies": companies,
+            "websites": websites,
+            "external_games": [],
+        }
+ 
     # =========================================================
     # GAMES
     # =========================================================
-
+ 
     def get_games(
         self,
         page: int = 1,
@@ -194,149 +174,135 @@ class GameService:
         year: int | None = None,
         genre_id: int | None = None,
         platform_id: int | None = None,
-        ordering: str = "rating desc",
+        ordering: str = "-added",
+        dates: str | None = None,
     ):
-
-        offset = (
-            (page - 1)
-            * page_size
-        )
-
-        conditions = []
-
+ 
+        params: dict[str, Any] = {
+            "page": page,
+            "page_size": page_size,
+            "ordering": ordering,
+            "exclude_additions": "true",
+        }
+ 
         if year:
-            start = (
-                self._timestamp_for_year_start(
-                    year
-                )
-            )
-
-            end = (
-                self._timestamp_for_year_end(
-                    year
-                )
-            )
-
-            conditions.append(
-                f"first_release_date >= {start}"
-            )
-
-            conditions.append(
-                f"first_release_date <= {end}"
-            )
-
+            params["dates"] = f"{year}-01-01,{year}-12-31"
+ 
+        if dates:
+            params["dates"] = dates
+ 
         if genre_id:
-            conditions.append(
-                f"genres = {genre_id}"
+            params["genres"] = GENRE_MAP.get(
+                int(genre_id),
+                genre_id,
             )
-
+ 
         if platform_id:
-            conditions.append(
-                f"platforms = {platform_id}"
+            params["platforms"] = PLATFORM_MAP.get(
+                int(platform_id),
+                platform_id,
             )
-
-        where_clause = ""
-
-        if conditions:
-            where_clause = (
-                "where "
-                + " & ".join(conditions)
-                + ";"
-            )
-
-        query = f"""
-            fields {self.GAME_FIELDS};
-            {where_clause}
-            sort {ordering};
-            limit {page_size};
-            offset {offset};
-        """
-
-        return self._request(
-            "games",
-            query,
-        )
-
+ 
+        data = self._request("games", params)
+ 
+        return [
+            self._normalize(item)
+            for item in data.get("results", [])
+        ]
+ 
     # =========================================================
     # SEARCH
     # =========================================================
-
+ 
     def search_games(
         self,
         query_text: str,
         page: int = 1,
         page_size: int = 10,
     ):
-
-        offset = (
-            (page - 1)
-            * page_size
-        )
-
-        safe_query = (
-            query_text
-            .replace(
-                '"',
-                '\\"',
-            )
-        )
-
-        query = f"""
-            search "{safe_query}";
-            fields {self.GAME_FIELDS};
-            limit {page_size};
-            offset {offset};
-        """
-
-        return self._request(
+ 
+        data = self._request(
             "games",
-            query,
+            {
+                "search": query_text,
+                "page": page,
+                "page_size": page_size,
+                "exclude_additions": "true",
+            },
         )
-
+ 
+        return [
+            self._normalize(item)
+            for item in data.get("results", [])
+        ]
+ 
     # =========================================================
     # GAME DETAILS
     # =========================================================
-
+ 
     def get_game_details(
         self,
         game_id: int,
     ):
-
-        query = f"""
-            fields {self.GAME_FIELDS};
-            where id = {game_id};
-        """
-
-        games = self._request(
-            "games",
-            query,
-        )
-
-        if not games:
-            return None
-
-        return games[0]
-
+ 
+        try:
+            raw = self._request(f"games/{game_id}")
+        except requests.HTTPError as error:
+            if (
+                error.response is not None
+                and error.response.status_code == 404
+            ):
+                return None
+            raise
+ 
+        game = self._normalize(raw)
+ 
+        # لینک فروشگاه‌ها
+        store_names = {}
+ 
+        for item in raw.get("stores") or []:
+            store = item.get("store") or {}
+            if store.get("id"):
+                store_names[store["id"]] = store.get("name")
+ 
+        try:
+            stores = self._request(
+                f"games/{game_id}/stores"
+            ).get("results", [])
+        except Exception:
+            stores = []
+ 
+        game["external_games"] = [
+            {
+                "name": store_names.get(item.get("store_id")),
+                "url": item.get("url"),
+                "external_game_source": {
+                    "name": store_names.get(
+                        item.get("store_id")
+                    )
+                },
+            }
+            for item in stores
+            if item.get("url")
+        ]
+ 
+        return game
+ 
     # =========================================================
-    # POPULAR
+    # POPULAR / YEAR / GENRE / PLATFORM
     # =========================================================
-
+ 
     def get_popular_games(
         self,
         page: int = 1,
         page_size: int = 10,
     ):
-
+ 
         return self.get_games(
             page=page,
             page_size=page_size,
-            ordering="rating desc",
         )
-
-    # =========================================================
-    # BY YEAR
-    # =========================================================
-
+ 
     def get_games_by_year(
         self,
         year: int,
@@ -345,20 +311,15 @@ class GameService:
         genre_id: int | None = None,
         platform_id: int | None = None,
     ):
-
+ 
         return self.get_games(
             page=page,
             page_size=page_size,
             year=year,
             genre_id=genre_id,
             platform_id=platform_id,
-            ordering="rating desc",
         )
-
-    # =========================================================
-    # BY GENRE
-    # =========================================================
-
+ 
     def get_games_by_genre(
         self,
         genre_id: int,
@@ -367,20 +328,15 @@ class GameService:
         year: int | None = None,
         platform_id: int | None = None,
     ):
-
+ 
         return self.get_games(
             page=page,
             page_size=page_size,
             year=year,
             genre_id=genre_id,
             platform_id=platform_id,
-            ordering="rating desc",
         )
-
-    # =========================================================
-    # BY PLATFORM
-    # =========================================================
-
+ 
     def get_games_by_platform(
         self,
         platform_id: int,
@@ -389,301 +345,122 @@ class GameService:
         year: int | None = None,
         genre_id: int | None = None,
     ):
-
+ 
         return self.get_games(
             page=page,
             page_size=page_size,
             year=year,
             genre_id=genre_id,
             platform_id=platform_id,
-            ordering="rating desc",
         )
-
+ 
     # =========================================================
     # UPCOMING
     # =========================================================
-
+ 
     def get_upcoming_games(
         self,
         page: int = 1,
         page_size: int = 10,
     ):
-
-        now = int(
-            datetime.now(
-                timezone.utc
-            ).timestamp()
+ 
+        today = datetime.now(timezone.utc).date()
+        end = today + timedelta(days=365)
+ 
+        return self.get_games(
+            page=page,
+            page_size=page_size,
+            ordering="released",
+            dates=f"{today.isoformat()},{end.isoformat()}",
         )
-
-        offset = (
-            (page - 1)
-            * page_size
-        )
-
-        query = f"""
-            fields {self.GAME_FIELDS};
-            where first_release_date >= {now};
-            sort first_release_date asc;
-            limit {page_size};
-            offset {offset};
-        """
-
-        return self._request(
-            "games",
-            query,
-        )
-
+ 
     # =========================================================
-    # COVER URL
+    # HELPERS (همون نام‌های قبلی)
     # =========================================================
-
+ 
     @staticmethod
     def get_cover_url(
         game: dict,
         size: str = "cover_big",
     ) -> str | None:
-
-        cover = game.get(
-            "cover"
-        )
-
-        if not cover:
-            return None
-
-        image_id = cover.get(
-            "image_id"
-        )
-
-        if not image_id:
-            return None
-
-        return (
-            "https://images.igdb.com/"
-            "igdb/image/upload/"
-            f"t_{size}/"
-            f"{image_id}.jpg"
-        )
-
-    # =========================================================
-    # SCREENSHOT URLS
-    # =========================================================
-
+ 
+        return game.get("cover_url") or None
+ 
     @staticmethod
     def get_screenshot_urls(
         game: dict,
         size: str = "screenshot_big",
     ) -> list[str]:
-
-        result = []
-
-        for screenshot in game.get(
-            "screenshots",
-            [],
-        ):
-
-            image_id = screenshot.get(
-                "image_id"
-            )
-
-            if image_id:
-                result.append(
-                    "https://images.igdb.com/"
-                    "igdb/image/upload/"
-                    f"t_{size}/"
-                    f"{image_id}.jpg"
-                )
-
-        return result
-
-    # =========================================================
-    # GENRES
-    # =========================================================
-
+ 
+        return []
+ 
     @staticmethod
-    def get_genres(
-        game: dict,
-    ) -> list[str]:
-
-        result = []
-
-        for genre in game.get(
-            "genres",
-            [],
-        ):
-
-            name = genre.get(
-                "name"
-            )
-
-            if name:
-                result.append(name)
-
-        return result
-
-    # =========================================================
-    # PLATFORMS
-    # =========================================================
-
+    def get_genres(game: dict) -> list[str]:
+ 
+        return [
+            g["name"]
+            for g in game.get("genres", [])
+            if g.get("name")
+        ]
+ 
     @staticmethod
-    def get_platforms(
-        game: dict,
-    ) -> list[str]:
-
-        result = []
-
-        for platform in game.get(
-            "platforms",
-            [],
-        ):
-
-            name = platform.get(
-                "name"
-            )
-
-            if name:
-                result.append(name)
-
-        return result
-
-    # =========================================================
-    # DEVELOPERS
-    # =========================================================
-
+    def get_platforms(game: dict) -> list[str]:
+ 
+        return [
+            p["name"]
+            for p in game.get("platforms", [])
+            if p.get("name")
+        ]
+ 
     @staticmethod
-    def get_developers(
-        game: dict,
-    ) -> list[str]:
-
-        result = []
-
-        for company in game.get(
-            "involved_companies",
-            [],
-        ):
-
-            if company.get(
-                "developer"
-            ):
-
-                data = company.get(
-                    "company",
-                    {}
-                )
-
-                name = data.get(
-                    "name"
-                )
-
-                if name:
-                    result.append(name)
-
-        return result
-
-    # =========================================================
-    # PUBLISHERS
-    # =========================================================
-
+    def get_developers(game: dict) -> list[str]:
+ 
+        return [
+            c["company"]["name"]
+            for c in game.get("involved_companies", [])
+            if c.get("developer")
+            and c.get("company", {}).get("name")
+        ]
+ 
     @staticmethod
-    def get_publishers(
-        game: dict,
-    ) -> list[str]:
-
-        result = []
-
-        for company in game.get(
-            "involved_companies",
-            [],
-        ):
-
-            if company.get(
-                "publisher"
-            ):
-
-                data = company.get(
-                    "company",
-                    {}
-                )
-
-                name = data.get(
-                    "name"
-                )
-
-                if name:
-                    result.append(name)
-
-        return result
-
-    # =========================================================
-    # WEBSITE
-    # =========================================================
-
+    def get_publishers(game: dict) -> list[str]:
+ 
+        return [
+            c["company"]["name"]
+            for c in game.get("involved_companies", [])
+            if c.get("publisher")
+            and c.get("company", {}).get("name")
+        ]
+ 
     @staticmethod
-    def get_official_website(
-        game: dict,
-    ) -> str | None:
-
-        for website in game.get(
-            "websites",
-            [],
-        ):
-
-            if (
-                website.get("type") == 1
-                or website.get("trusted") is True
-            ):
-                url = website.get(
-                    "url"
-                )
-
-                if url:
-                    return url
-
+    def get_official_website(game: dict) -> str | None:
+ 
+        for website in game.get("websites", []):
+            if website.get("url"):
+                return website["url"]
+ 
         return None
-
-    # =========================================================
-    # STORE LINKS
-    # =========================================================
-
+ 
     @staticmethod
-    def get_store_links(
-        game: dict,
-    ):
-
+    def get_store_links(game: dict):
+ 
         result = []
-
-        for item in game.get(
-            "external_games",
-            [],
-        ):
-
-            name = item.get(
-                "name"
-            )
-
-            url = item.get(
-                "url"
-            )
-
-            source = item.get(
-                "external_game_source",
-                {}
-            )
-
-            source_name = source.get(
-                "name"
-            )
-
-            if not source_name:
-                source_name = name
-
-            if url:
-
-                result.append(
-                    (
-                        source_name
-                        or "Store",
-                        url,
-                    )
+ 
+        for item in game.get("external_games", []):
+            url = item.get("url")
+ 
+            if not url:
+                continue
+ 
+            source = item.get("external_game_source") or {}
+ 
+            result.append(
+                (
+                    source.get("name")
+                    or item.get("name")
+                    or "Store",
+                    url,
                 )
-
+            )
+ 
         return result
