@@ -16,15 +16,24 @@ TELEGRAM_BOT_TOKEN = os.getenv(
 
 
 # =========================
-# RAWG API
+# IGDB / Twitch
 # =========================
 
-RAWG_API_KEY = os.getenv(
-    "RAWG_API_KEY",
+TWITCH_CLIENT_ID = os.getenv(
+    "TWITCH_CLIENT_ID",
     "",
 ).strip()
 
-RAWG_BASE_URL = "https://api.rawg.io/api"
+TWITCH_CLIENT_SECRET = os.getenv(
+    "TWITCH_CLIENT_SECRET",
+    "",
+).strip()
+
+IGDB_BASE_URL = "https://api.igdb.com/v4"
+
+TWITCH_TOKEN_URL = (
+    "https://id.twitch.tv/oauth2/token"
+)
 
 
 # =========================
