@@ -11,15 +11,18 @@ class GameAgent:
 
     def __init__(self):
 
-        if not QWEN_API_KEY:
-            raise ValueError(
-                "QWEN_API_KEY تنظیم نشده است."
-            )
-
-        self.client = OpenAI(
-            api_key=QWEN_API_KEY,
-            base_url=QWEN_BASE_URL,
+        self.enabled = bool(
+            QWEN_API_KEY
         )
+
+        self.client = None
+
+        if self.enabled:
+
+            self.client = OpenAI(
+                api_key=QWEN_API_KEY,
+                base_url=QWEN_BASE_URL,
+            )
 
     def describe_game(
         self,
@@ -28,6 +31,16 @@ class GameAgent:
         description: str,
         platforms: list[str],
     ):
+
+        # اگر Qwen فعال نیست،
+        # همان توضیح RAWG را برمی‌گردانیم.
+
+        if not self.enabled:
+
+            return description or (
+                f"{title} یک بازی در سبک "
+                f"{genre} است."
+            )
 
         platforms_text = (
             "، ".join(platforms)
@@ -39,7 +52,7 @@ class GameAgent:
 نام بازی:
 {title}
 
-دسته‌ای که کاربر انتخاب کرده:
+سبک:
 {genre}
 
 پلتفرم‌ها:
@@ -48,45 +61,57 @@ class GameAgent:
 توضیحات واقعی بازی:
 {description}
 
-یک معرفی فارسی و جذاب برای این بازی بنویس.
+یک معرفی فارسی کوتاه، جذاب و دقیق
+برای این بازی بنویس.
 
 قوانین:
 
-1. فقط درباره خود بازی صحبت کن.
-2. درباره فضای بازی توضیح بده.
-3. درباره سبک و تجربه گیم‌پلی توضیح بده.
-4. اگر داستان یا دنیای بازی در توضیحات منبع وجود دارد،
-   درباره آن صحبت کن.
-5. درباره سازنده، شرکت سازنده یا تاریخچه سازندگان صحبت نکن.
-6. تاریخ انتشار را محور معرفی قرار نده.
-7. اطلاعاتی که در داده‌های واقعی بالا نیستند
-   اختراع نکن.
-8. متن خیلی طولانی نباشد.
-9. فارسی روان و طبیعی بنویس.
-10. معرفی باید برای کسی باشد که می‌خواهد بفهمد
-    این بازی چه تجربه‌ای به او می‌دهد.
+1. اطلاعات جدید اختراع نکن.
+2. فقط بر اساس اطلاعات داده‌شده بنویس.
+3. درباره تجربه گیم‌پلی توضیح بده.
+4. درباره فضای بازی توضیح بده.
+5. اگر داستان در توضیحات وجود داشت،
+   به آن اشاره کن.
+6. متن خیلی طولانی نباشد.
+7. فارسی روان باشد.
 """
 
-        response = self.client.chat.completions.create(
-            model=QWEN_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "تو یک منتقد حرفه‌ای بازی‌های "
-                        "ویدیویی هستی. "
-                        "وظیفه تو معرفی جذاب و دقیق بازی‌ها "
-                        "به زبان فارسی است."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-        )
+        try:
 
-        return (
-            response.choices[0].message.content
-            or "نتوانستم معرفی بازی را تولید کنم."
+            response = (
+                self.client.chat.completions.create(
+                    model=QWEN_MODEL,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "تو یک منتقد حرفه‌ای "
+                                "بازی‌های ویدیویی هستی."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        },
+                    ],
+                )
+            )
+
+            result = (
+                response
+                .choices[0]
+                .message
+                .content
+            )
+
+            if result:
+                return result
+
+        except Exception:
+
+            pass
+
+        return description or (
+            f"{title} یک بازی در سبک "
+            f"{genre} است."
         )

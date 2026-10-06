@@ -1,205 +1,116 @@
+from datetime import datetime
+
 from telegram import (
-    Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    Update,
 )
+
+from telegram.constants import ParseMode
 
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters,
 )
 
-from config import TELEGRAM_BOT_TOKEN
-from database import init_database
-
-from tools import (
-    search_games,
-    choose_best_match,
-    get_game_details,
+from config import (
+    TELEGRAM_BOT_TOKEN,
 )
+
+from database import (
+    add_favorite,
+    follow_game,
+    get_favorites,
+    init_database,
+    is_favorite,
+    mark_notified,
+    remove_favorite,
+    save_user,
+    unfollow_game,
+    get_followed_games,
+)
+
+from game_service import GameService
 
 from agent import GameAgent
 
-
-# =========================================================
-# Agent
-# =========================================================
-
-agent = GameAgent()
-
-
-# =========================================================
-# User Sessions
-# =========================================================
-
-user_sessions = {}
+from tools import (
+    clean_text,
+    get_developer_names,
+    get_genre_names,
+    get_platform_names,
+    get_publisher_names,
+    get_store_links,
+    truncate,
+)
 
 
 # =========================================================
-# Game Categories
+# Global services
 # =========================================================
 
-# ID کوتاه برای callback_data
-# نام فارسی برای نمایش به کاربر
-
-GAME_CATEGORIES = [
-    ("action", "⚔️ اکشن"),
-    ("adventure", "🗺️ ماجراجویی"),
-    ("rpg", "🧙 نقش‌آفرینی"),
-    ("strategy", "♟️ استراتژی"),
-    ("simulation", "🏗️ شبیه‌سازی"),
-    ("sports", "⚽ ورزشی"),
-    ("racing", "🏎️ مسابقه‌ای"),
-    ("shooter", "🔫 تیراندازی"),
-    ("horror", "👻 ترسناک"),
-    ("puzzle", "🧩 معمایی"),
-    ("fighting", "🥊 مبارزه‌ای"),
-    ("platformer", "🎮 پلتفرمر"),
-    ("survival", "🧟 بقا"),
-    ("roguelike", "🎲 روگ‌لایک"),
-    ("mmo", "🌐 MMO"),
-    ("casual", "☕ کژوال"),
-]
-
-
-# تعداد دسته‌ها در هر صفحه
-CATEGORIES_PER_PAGE = 6
+game_service = None
+game_agent = GameAgent()
 
 
 # =========================================================
-# Category Helper
+# Sessions
 # =========================================================
 
-def get_total_pages():
-    return (
-        len(GAME_CATEGORIES)
-        + CATEGORIES_PER_PAGE
-        - 1
-    ) // CATEGORIES_PER_PAGE
-
-
-def get_category_page(page: int):
-    start = page * CATEGORIES_PER_PAGE
-
-    end = start + CATEGORIES_PER_PAGE
-
-    return GAME_CATEGORIES[start:end]
+sessions = {}
 
 
 # =========================================================
-# Category Keyboard
+# Genres
 # =========================================================
 
-def category_keyboard(page: int = 0):
-
-    total_pages = get_total_pages()
-
-    # محدود کردن صفحه
-    if page < 0:
-        page = 0
-
-    if page >= total_pages:
-        page = total_pages - 1
-
-    categories = get_category_page(page)
-
-    keyboard = []
-
-    # دو ستون
-    for i in range(
-        0,
-        len(categories),
-        2,
-    ):
-
-        row = []
-
-        for category_id, category_name in categories[
-            i:i + 2
-        ]:
-
-            row.append(
-                InlineKeyboardButton(
-                    category_name,
-                    callback_data=f"genre:{category_id}",
-                )
-            )
-
-        keyboard.append(row)
-
-    # Navigation
-    navigation = []
-
-    if page > 0:
-        navigation.append(
-            InlineKeyboardButton(
-                "⬅️ قبلی",
-                callback_data=f"catpage:{page - 1}",
-            )
-        )
-
-    navigation.append(
-        InlineKeyboardButton(
-            f"📄 {page + 1}/{total_pages}",
-            callback_data="catpage:current",
-        )
-    )
-
-    if page < total_pages - 1:
-        navigation.append(
-            InlineKeyboardButton(
-                "بعدی ➡️",
-                callback_data=f"catpage:{page + 1}",
-            )
-        )
-
-    keyboard.append(navigation)
-
-    return InlineKeyboardMarkup(keyboard)
+GENRES = {
+    "action": "اکشن",
+    "adventure": "ماجراجویی",
+    "rpg": "نقش‌آفرینی",
+    "strategy": "استراتژی",
+    "simulation": "شبیه‌سازی",
+    "sports": "ورزشی",
+    "racing": "مسابقه‌ای",
+    "shooter": "شوتر",
+    "horror": "ترسناک",
+    "puzzle": "پازل",
+    "fighting": "مبارزه‌ای",
+    "platformer": "پلتفرمر",
+    "indie": "ایندی",
+    "arcade": "آرکید",
+    "casual": "کژوال",
+    "family": "خانوادگی",
+    "board-games": "بازی‌های رومیزی",
+    "educational": "آموزشی",
+    "massively-multiplayer": "آنلاین / MMO",
+}
 
 
 # =========================================================
-# Game Action Keyboard
+# Platforms
 # =========================================================
 
-def game_action_keyboard():
-
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "🎮 انتخاب بازی دیگر",
-                callback_data="action:new_game",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🔙 تغییر دسته",
-                callback_data="action:categories",
-            )
-        ],
-    ])
+PLATFORMS = {
+    4: "PC",
+    187: "PS5",
+    18: "PS4",
+    16: "PS3",
+    186: "Xbox Series",
+    1: "Xbox One",
+    14: "Xbox 360",
+    7: "Nintendo Switch",
+    6: "Linux",
+    5: "macOS",
+    21: "Android",
+    3: "iOS",
+}
 
 
 # =========================================================
-# Category Name From ID
-# =========================================================
-
-def get_category_name(category_id: str):
-
-    for item_id, item_name in GAME_CATEGORIES:
-
-        if item_id == category_id:
-            return item_name
-
-    return category_id
-
-
-# =========================================================
-# /start
+# Start
 # =========================================================
 
 async def start(
@@ -207,430 +118,1290 @@ async def start(
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
-    user_id = update.effective_user.id
+    user = update.effective_user
 
-    user_sessions[user_id] = {
-        "step": "choose_genre",
-        "genre": None,
-    }
-
-    await update.message.reply_text(
-        "🎮 خوش اومدی!\n\n"
-        "اول مشخص کن دنبال چه نوع بازی‌ای هستی:\n\n"
-        "💻 فقط بازی‌های کامپیوتری (Windows) "
-        "بررسی می‌شن.\n\n"
-        "یک دسته رو انتخاب کن:",
-        reply_markup=category_keyboard(0),
+    save_user(
+        telegram_id=user.id,
+        username=user.username,
+        first_name=user.first_name,
     )
 
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🎮 کشف بازی‌ها",
+                callback_data="discover",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🔥 بازی‌های محبوب",
+                callback_data="popular",
+            ),
+            InlineKeyboardButton(
+                "📅 بازی‌های ۲۰۲۶",
+                callback_data="year:2026",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🎯 انتخاب ژانر",
+                callback_data="genres",
+            ),
+            InlineKeyboardButton(
+                "💻 انتخاب پلتفرم",
+                callback_data="platforms",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "❤️ علاقه‌مندی‌ها",
+                callback_data="favorites",
+            ),
+        ],
+    ]
 
-# =========================================================
-# Category Pagination
-# =========================================================
+    text = """
+🎮 <b>Game Discovery Agent</b>
 
-async def category_page(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+به ربات کشف بازی خوش آمدی.
 
-    query = update.callback_query
+اینجا می‌توانی بازی‌ها را بر اساس:
 
-    await query.answer()
+🎯 ژانر
+📅 سال انتشار
+💻 پلتفرم
+⭐ امتیاز
+🔥 محبوبیت
 
-    # دکمه شماره صفحه فعلی
-    if query.data == "catpage:current":
-        return
+پیدا کنی.
 
-    page_text = query.data.replace(
-        "catpage:",
-        "",
-    )
+بعد از انتخاب هر بازی می‌توانی اطلاعات کامل،
+لینک فروشگاه رسمی، علاقه‌مندی و اعلان انتشار
+را ببینی.
+"""
 
-    try:
-        page = int(page_text)
+    if update.message:
 
-    except ValueError:
-        return
-
-    await query.edit_message_text(
-        "🎮 نوع بازی موردنظرت رو انتخاب کن:\n\n"
-        "💻 فقط بازی‌های Windows بررسی می‌شن.\n"
-        f"📄 صفحه {page + 1} از {get_total_pages()}",
-        reply_markup=category_keyboard(page),
-    )
-
-
-# =========================================================
-# Category Selected
-# =========================================================
-
-async def category_selected(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    user_id = query.from_user.id
-
-    category_id = query.data.replace(
-        "genre:",
-        "",
-    )
-
-    genre = get_category_name(category_id)
-
-    user_sessions[user_id] = {
-        "step": "enter_game",
-        "genre": genre,
-        "genre_id": category_id,
-    }
-
-    await query.edit_message_text(
-        f"✅ دسته انتخاب شد:\n\n"
-        f"{genre}\n\n"
-        " پیشنهادی  بازی های 2026 🎮\n\n"
-        "• Civilization VI\n"
-        "• The Witcher 3\n"
-        "• Elden Ring"
-    )
-
-
-# =========================================================
-# Back To Categories
-# =========================================================
-
-async def back_to_categories(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    user_id = query.from_user.id
-
-    user_sessions[user_id] = {
-        "step": "choose_genre",
-        "genre": None,
-    }
-
-    await query.edit_message_text(
-        "🎮 نوع بازی موردنظرت رو انتخاب کن:\n\n"
-        "💻 فقط بازی‌های Windows بررسی می‌شن.\n\n"
-        f"📄 صفحه 1 از {get_total_pages()}",
-        reply_markup=category_keyboard(0),
-    )
-
-
-# =========================================================
-# Choose Another Game
-# =========================================================
-
-async def choose_another_game(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    user_id = query.from_user.id
-
-    session = user_sessions.get(user_id)
-
-    if not session:
-
-        user_sessions[user_id] = {
-            "step": "choose_genre",
-            "genre": None,
-        }
-
-        await query.edit_message_text(
-            "🎮 اول یک دسته بازی انتخاب کن:",
-            reply_markup=category_keyboard(0),
+        await update.message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(
+                keyboard
+            ),
         )
 
-        return
 
-    genre = session.get("genre")
+# =========================================================
+# Discover
+# =========================================================
 
-    user_sessions[user_id] = {
-        "step": "enter_game",
-        "genre": genre,
-        "genre_id": session.get(
-            "genre_id"
+async def show_discover(
+    query,
+):
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "📅 انتخاب سال",
+                callback_data="years",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🎯 انتخاب ژانر",
+                callback_data="genres",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "💻 انتخاب پلتفرم",
+                callback_data="platforms",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🔥 محبوب‌ترین‌ها",
+                callback_data="popular",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🏠 منوی اصلی",
+                callback_data="home",
+            ),
+        ],
+    ]
+
+    await query.edit_message_text(
+        "🎮 <b>کشف بازی</b>\n\n"
+        "چطور می‌خواهی بازی پیدا کنی؟",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
         ),
-    }
-
-    await query.edit_message_text(
-        f"🎮 دسته فعلی:\n"
-        f"{genre}\n\n"
-        "اسم بازی بعدی رو بفرست:"
     )
 
 
 # =========================================================
-# Handle Game Name
+# Years
 # =========================================================
 
-async def handle_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+async def show_years(
+    query,
 ):
 
-    user_id = update.effective_user.id
+    keyboard = []
 
-    message = update.message.text.strip()
+    current_year = datetime.now().year
 
-    # =====================================================
-    # User Search Log
-    # =====================================================
-
-    username = update.effective_user.username or "بدون username"
-    first_name = update.effective_user.first_name or "بدون نام"
-
-    print(
-        f"🔎 SEARCH | "
-        f"user={first_name} | "
-        f"username=@{username} | "
-        f"id={user_id} | "
-        f"query={message}",
-        flush=True,
+    years = list(
+        range(
+            current_year,
+            2009,
+            -1,
+        )
     )
 
-    # =====================================================
-    # Session
-    # =====================================================
+    row = []
 
-    session = user_sessions.get(
-        user_id
+    for year in years:
+
+        row.append(
+            InlineKeyboardButton(
+                str(year),
+                callback_data=f"year:{year}",
+            )
+        )
+
+        if len(row) == 3:
+
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "⬅️ برگشت",
+                callback_data="discover",
+            )
+        ]
     )
 
-    # کاربر هنوز /start نزده
-    if not session:
+    await query.edit_message_text(
+        "📅 <b>سال انتشار را انتخاب کن:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
+        ),
+    )
 
-        await update.message.reply_text(
-            "اول /start رو بزن تا شروع کنیم."
+
+# =========================================================
+# Genres
+# =========================================================
+
+async def show_genres(
+    query,
+):
+
+    keyboard = []
+
+    row = []
+
+    for slug, name in GENRES.items():
+
+        row.append(
+            InlineKeyboardButton(
+                name,
+                callback_data=f"genre:{slug}",
+            )
         )
 
-        return
+        if len(row) == 2:
 
-    # هنوز دسته انتخاب نشده
-    if session["step"] != "enter_game":
+            keyboard.append(row)
+            row = []
 
-        await update.message.reply_text(
-            "اول یک دسته بازی انتخاب کن."
+    if row:
+        keyboard.append(row)
+
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "⬅️ برگشت",
+                callback_data="discover",
+            )
+        ]
+    )
+
+    await query.edit_message_text(
+        "🎯 <b>ژانر بازی را انتخاب کن:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
+        ),
+    )
+
+
+# =========================================================
+# Platforms
+# =========================================================
+
+async def show_platforms(
+    query,
+):
+
+    keyboard = []
+
+    row = []
+
+    for platform_id, name in PLATFORMS.items():
+
+        row.append(
+            InlineKeyboardButton(
+                name,
+                callback_data=(
+                    f"platform:{platform_id}"
+                ),
+            )
         )
 
-        return
+        if len(row) == 2:
 
-    genre = session["genre"]
+            keyboard.append(row)
+            row = []
 
-    searching_message = (
-        await update.message.reply_text(
-            "🔎 دارم بین بازی‌های PC می‌گردم..."
-        )
+    if row:
+        keyboard.append(row)
+
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "⬅️ برگشت",
+                callback_data="discover",
+            )
+        ]
+    )
+
+    await query.edit_message_text(
+        "💻 <b>پلتفرم را انتخاب کن:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
+        ),
+    )
+
+
+# =========================================================
+# Fetch games
+# =========================================================
+
+async def fetch_and_show_games(
+    query,
+    *,
+    title: str,
+    year: int | None = None,
+    genre: str | None = None,
+    platform: int | None = None,
+    popular: bool = False,
+    page: int = 1,
+):
+
+    await query.edit_message_text(
+        "⏳ در حال دریافت بازی‌ها..."
     )
 
     try:
 
-        # =================================================
-        # Search
-        # =================================================
+        if popular:
 
-        games = search_games(
-            message,
-            limit=24,
-        )
-
-        if not games:
-
-            await searching_message.edit_text(
-                "❌ بازی مناسبی برای PC پیدا نکردم.\n\n"
-                "اسم بازی رو دقیق‌تر بفرست."
+            data = game_service.get_popular_games(
+                page=page,
+                page_size=8,
             )
 
-            return
+        elif year:
 
-        # =================================================
-        # Best Match
-        # =================================================
-
-        game = choose_best_match(
-            games,
-            message,
-        )
-
-        if not game:
-
-            await searching_message.edit_text(
-                "❌ بازی پیدا نشد."
+            data = game_service.get_games_by_year(
+                year=year,
+                page=page,
+                page_size=8,
+                genres=genre,
+                platforms=(
+                    str(platform)
+                    if platform
+                    else None
+                ),
             )
 
-            return
+        elif genre:
 
-        title = game.get(
-            "title",
-            message,
-        )
-
-        slug = game.get(
-            "slug"
-        )
-
-        if not slug:
-
-            await searching_message.edit_text(
-                "❌ شناسه بازی پیدا نشد."
-            )
-
-            return
-
-        # =================================================
-        # Full Details
-        # =================================================
-
-        details = get_game_details(
-            slug
-        )
-
-        if not details:
-            details = game
-
-        description = details.get(
-            "description",
-            game.get(
-                "description",
-                "",
-            ),
-        )
-
-        platforms = details.get(
-            "platforms",
-            game.get(
-                "platforms",
-                [],
-            ),
-        )
-
-        cover_url = (
-            details.get(
-                "coverImageUrl"
-            )
-            or game.get(
-                "coverImageUrl"
-            )
-        )
-
-        game_url = (
-            details.get(
-                "url"
-            )
-            or game.get(
-                "url"
-            )
-        )
-
-        popularity = game.get(
-            "_popularity",
-            {},
-        )
-
-        owners = popularity.get(
-            "owners",
-            0,
-        )
-
-        # =================================================
-        # Qwen Introduction
-        # =================================================
-
-        introduction = (
-            agent.describe_game(
-                title=title,
+            data = game_service.get_games_by_genre(
                 genre=genre,
-                description=description,
-                platforms=platforms,
-            )
-        )
-
-        # حذف پیام در حال جستجو
-        await searching_message.delete()
-
-        # =================================================
-        # Message 1
-        # =================================================
-
-        popularity_text = ""
-
-        if owners > 0:
-
-            popularity_text = (
-                "\n\n🔥 این بازی در بین "
-                "بازی‌های محبوب Steam قرار دارد."
+                page=page,
+                page_size=8,
+                year=year,
             )
 
-        await update.message.reply_text(
-            f"🎮 {title}\n\n"
-            f"{introduction}"
-            f"{popularity_text}",
-            reply_markup=game_action_keyboard(),
-        )
+        elif platform:
 
-        # =================================================
-        # Message 2 - Image + Link
-        # =================================================
-
-        if cover_url:
-
-            caption = (
-                f"🖼️ {title}"
+            data = game_service.get_games_by_platform(
+                platform_id=platform,
+                page=page,
+                page_size=8,
+                year=year,
             )
 
-            if game_url:
+        else:
 
-                caption += (
-                    f"\n\n🔗 لینک بازی:\n"
-                    f"{game_url}"
-                )
-
-            await update.message.reply_photo(
-                photo=cover_url,
-                caption=caption,
+            data = game_service.get_games(
+                page=page,
+                page_size=8,
             )
-
-        elif game_url:
-
-            await update.message.reply_text(
-                f"🔗 لینک بازی:\n"
-                f"{game_url}"
-            )
-
-        # حفظ دسته فعلی
-        user_sessions[user_id] = {
-            "step": "enter_game",
-            "genre": genre,
-            "genre_id": session.get(
-                "genre_id"
-            ),
-        }
 
     except Exception as error:
 
         print(
-            f"Game error: {error}",
-            flush=True,
+            "RAWG ERROR:",
+            error,
         )
 
-        await update.message.reply_text(
-            "❌ هنگام دریافت اطلاعات بازی "
-            "مشکلی پیش آمد."
+        await query.edit_message_text(
+            "❌ دریافت اطلاعات بازی‌ها انجام نشد.\n\n"
+            "لطفاً چند لحظه بعد دوباره امتحان کن."
         )
+
+        return
+
+    games = data.get(
+        "results",
+        [],
+    )
+
+    if not games:
+
+        await query.edit_message_text(
+            "❌ بازی‌ای با این فیلتر پیدا نشد."
+        )
+
+        return
+
+    sessions[
+        query.from_user.id
+    ] = {
+        "games": games,
+        "page": page,
+        "year": year,
+        "genre": genre,
+        "platform": platform,
+        "popular": popular,
+        "title": title,
+    }
+
+    keyboard = []
+
+    for game in games:
+
+        game_id = game.get(
+            "id"
+        )
+
+        name = game.get(
+            "name",
+            "Unknown",
+        )
+
+        rating = game.get(
+            "rating"
+        )
+
+        if rating:
+
+            button_text = (
+                f"🎮 {name} ⭐ {rating}"
+            )
+
+        else:
+
+            button_text = (
+                f"🎮 {name}"
+            )
+
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    button_text[:60],
+                    callback_data=(
+                        f"game:{game_id}"
+                    ),
+                )
+            ]
+        )
+
+    navigation = []
+
+    if page > 1:
+
+        navigation.append(
+            InlineKeyboardButton(
+                "⬅️ قبلی",
+                callback_data="page:prev",
+            )
+        )
+
+    if data.get("next"):
+
+        navigation.append(
+            InlineKeyboardButton(
+                "بعدی ➡️",
+                callback_data="page:next",
+            )
+        )
+
+    if navigation:
+
+        keyboard.append(
+            navigation
+        )
+
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "🎮 فیلتر جدید",
+                callback_data="discover",
+            ),
+            InlineKeyboardButton(
+                "🏠 خانه",
+                callback_data="home",
+            ),
+        ]
+    )
+
+    await query.edit_message_text(
+        f"🎮 <b>{title}</b>\n\n"
+        f"صفحه {page}\n"
+        f"تعداد نتایج: {len(games)}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
+        ),
+    )
+
+
+# =========================================================
+# Game details
+# =========================================================
+
+async def show_game_details(
+    query,
+    game_id: int,
+):
+
+    await query.edit_message_text(
+        "⏳ در حال دریافت اطلاعات کامل بازی..."
+    )
+
+    try:
+
+        game = game_service.get_game_details(
+            game_id
+        )
+
+    except Exception as error:
+
+        print(
+            "GAME DETAILS ERROR:",
+            error,
+        )
+
+        await query.edit_message_text(
+            "❌ اطلاعات بازی دریافت نشد."
+        )
+
+        return
+
+    title = game.get(
+        "name",
+        "Unknown",
+    )
+
+    released = game.get(
+        "released"
+    ) or "نامشخص"
+
+    rating = game.get(
+        "rating"
+    )
+
+    metacritic = game.get(
+        "metacritic"
+    )
+
+    genres = get_genre_names(
+        game
+    )
+
+    platforms = get_platform_names(
+        game
+    )
+
+    developers = get_developer_names(
+        game
+    )
+
+    publishers = get_publisher_names(
+        game
+    )
+
+    description = clean_text(
+        game.get(
+            "description_raw"
+        )
+    )
+
+    if not description:
+
+        description = (
+            "توضیحی برای این بازی ثبت نشده است."
+        )
+
+    # معرفی با AI
+    ai_description = game_agent.describe_game(
+        title=title,
+        genre=(
+            "، ".join(genres)
+            if genres
+            else "نامشخص"
+        ),
+        description=description,
+        platforms=platforms,
+    )
+
+    favorite = is_favorite(
+        query.from_user.id,
+        game_id,
+    )
+
+    favorite_text = (
+        "💔 حذف از علاقه‌مندی‌ها"
+        if favorite
+        else "❤️ افزودن به علاقه‌مندی‌ها"
+    )
+
+    stores = get_store_links(
+        game
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                favorite_text,
+                callback_data=(
+                    f"favorite:{game_id}"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔔 اعلان انتشار",
+                callback_data=(
+                    f"follow:{game_id}"
+                ),
+            )
+        ],
+    ]
+
+    if stores:
+
+        for store_name, url in stores[:6]:
+
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        f"🔗 {store_name}",
+                        url=url,
+                    )
+                ]
+            )
+
+    website = game.get(
+        "website"
+    )
+
+    if website:
+
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "🌐 سایت رسمی",
+                    url=website,
+                )
+            ]
+        )
+
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "⬅️ برگشت",
+                callback_data="back_games",
+            ),
+            InlineKeyboardButton(
+                "🏠 خانه",
+                callback_data="home",
+            ),
+        ]
+    )
+
+    rating_text = (
+        str(rating)
+        if rating is not None
+        else "نامشخص"
+    )
+
+    metacritic_text = (
+        str(metacritic)
+        if metacritic is not None
+        else "نامشخص"
+    )
+
+    genre_text = (
+        "، ".join(genres)
+        if genres
+        else "نامشخص"
+    )
+
+    platform_text = (
+        "، ".join(platforms)
+        if platforms
+        else "نامشخص"
+    )
+
+    developer_text = (
+        "، ".join(developers)
+        if developers
+        else "نامشخص"
+    )
+
+    publisher_text = (
+        "، ".join(publishers)
+        if publishers
+        else "نامشخص"
+    )
+
+    text = (
+        f"🎮 <b>{title}</b>\n\n"
+
+        f"⭐ امتیاز: <b>{rating_text}</b>\n"
+        f"📊 Metacritic: <b>{metacritic_text}</b>\n"
+        f"📅 انتشار: <b>{released}</b>\n\n"
+
+        f"🎯 <b>ژانرها</b>\n"
+        f"{genre_text}\n\n"
+
+        f"💻 <b>پلتفرم‌ها</b>\n"
+        f"{platform_text}\n\n"
+
+        f"🏢 <b>سازنده</b>\n"
+        f"{developer_text}\n\n"
+
+        f"🏷 <b>ناشر</b>\n"
+        f"{publisher_text}\n\n"
+
+        f"📝 <b>معرفی</b>\n"
+        f"{truncate(ai_description, 1200)}"
+    )
+
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
+        ),
+        disable_web_page_preview=False,
+    )
+
+
+# =========================================================
+# Favorites
+# =========================================================
+
+async def show_favorites(
+    query,
+):
+
+    favorites = get_favorites(
+        query.from_user.id
+    )
+
+    if not favorites:
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🎮 کشف بازی",
+                    callback_data="discover",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🏠 خانه",
+                    callback_data="home",
+                )
+            ],
+        ]
+
+        await query.edit_message_text(
+            "❤️ هنوز هیچ بازی‌ای به علاقه‌مندی‌ها اضافه نکرده‌ای.",
+            reply_markup=InlineKeyboardMarkup(
+                keyboard
+            ),
+        )
+
+        return
+
+    keyboard = []
+
+    for game in favorites:
+
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    f"❤️ {game['game_name']}",
+                    callback_data=(
+                        f"game:{game['game_id']}"
+                    ),
+                )
+            ]
+        )
+
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "🏠 خانه",
+                callback_data="home",
+            )
+        ]
+    )
+
+    await query.edit_message_text(
+        "❤️ <b>بازی‌های موردعلاقه</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
+        ),
+    )
+
+
+# =========================================================
+# Callback Handler
+# =========================================================
+
+async def callback_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    data = query.data
+
+    user_id = query.from_user.id
+
+    # -----------------------------
+    # Home
+    # -----------------------------
+
+    if data == "home":
+
+        await start_from_query(
+            query
+        )
+
+        return
+
+    # -----------------------------
+    # Discover
+    # -----------------------------
+
+    if data == "discover":
+
+        await show_discover(
+            query
+        )
+
+        return
+
+    # -----------------------------
+    # Years
+    # -----------------------------
+
+    if data == "years":
+
+        await show_years(
+            query
+        )
+
+        return
+
+    # -----------------------------
+    # Genres
+    # -----------------------------
+
+    if data == "genres":
+
+        await show_genres(
+            query
+        )
+
+        return
+
+    # -----------------------------
+    # Platforms
+    # -----------------------------
+
+    if data == "platforms":
+
+        await show_platforms(
+            query
+        )
+
+        return
+
+    # -----------------------------
+    # Popular
+    # -----------------------------
+
+    if data == "popular":
+
+        await fetch_and_show_games(
+            query,
+            title="🔥 بازی‌های محبوب",
+            popular=True,
+        )
+
+        return
+
+    # -----------------------------
+    # Year
+    # -----------------------------
+
+    if data.startswith(
+        "year:"
+    ):
+
+        year = int(
+            data.split(":")[1]
+        )
+
+        await fetch_and_show_games(
+            query,
+            title=f"📅 بازی‌های {year}",
+            year=year,
+        )
+
+        return
+
+    # -----------------------------
+    # Genre
+    # -----------------------------
+
+    if data.startswith(
+        "genre:"
+    ):
+
+        genre = data.split(
+            ":",
+            1,
+        )[1]
+
+        genre_name = GENRES.get(
+            genre,
+            genre,
+        )
+
+        await fetch_and_show_games(
+            query,
+            title=(
+                f"🎯 بازی‌های {genre_name}"
+            ),
+            genre=genre,
+        )
+
+        return
+
+    # -----------------------------
+    # Platform
+    # -----------------------------
+
+    if data.startswith(
+        "platform:"
+    ):
+
+        platform_id = int(
+            data.split(":")[1]
+        )
+
+        platform_name = PLATFORMS.get(
+            platform_id,
+            "Platform",
+        )
+
+        await fetch_and_show_games(
+            query,
+            title=(
+                f"💻 بازی‌های {platform_name}"
+            ),
+            platform=platform_id,
+        )
+
+        return
+
+    # -----------------------------
+    # Game
+    # -----------------------------
+
+    if data.startswith(
+        "game:"
+    ):
+
+        game_id = int(
+            data.split(":")[1]
+        )
+
+        await show_game_details(
+            query,
+            game_id,
+        )
+
+        return
+
+    # -----------------------------
+    # Favorite
+    # -----------------------------
+
+    if data.startswith(
+        "favorite:"
+    ):
+
+        game_id = int(
+            data.split(":")[1]
+        )
+
+        try:
+
+            game = game_service.get_game_details(
+                game_id
+            )
+
+            game_name = game.get(
+                "name",
+                "Unknown",
+            )
+
+        except Exception:
+
+            game_name = "Unknown"
+
+        if is_favorite(
+            user_id,
+            game_id,
+        ):
+
+            remove_favorite(
+                user_id,
+                game_id,
+            )
+
+        else:
+
+            add_favorite(
+                user_id,
+                game_id,
+                game_name,
+            )
+
+        await show_game_details(
+            query,
+            game_id,
+        )
+
+        return
+
+    # -----------------------------
+    # Follow
+    # -----------------------------
+
+    if data.startswith(
+        "follow:"
+    ):
+
+        game_id = int(
+            data.split(":")[1]
+        )
+
+        try:
+
+            game = game_service.get_game_details(
+                game_id
+            )
+
+            game_name = game.get(
+                "name",
+                "Unknown",
+            )
+
+            release_date = game.get(
+                "released"
+            )
+
+        except Exception:
+
+            game_name = "Unknown"
+            release_date = None
+
+        follow_game(
+            telegram_id=user_id,
+            game_id=game_id,
+            game_name=game_name,
+            release_date=release_date,
+        )
+
+        await query.answer(
+            "🔔 اعلان این بازی فعال شد.",
+            show_alert=True,
+        )
+
+        return
+
+    # -----------------------------
+    # Favorites
+    # -----------------------------
+
+    if data == "favorites":
+
+        await show_favorites(
+            query
+        )
+
+        return
+
+    # -----------------------------
+    # Pagination
+    # -----------------------------
+
+    if data in (
+        "page:next",
+        "page:prev",
+    ):
+
+        session = sessions.get(
+            user_id
+        )
+
+        if not session:
+
+            await query.edit_message_text(
+                "❌ اطلاعات صفحه قبلی منقضی شده است.",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "🎮 کشف بازی",
+                                callback_data="discover",
+                            )
+                        ]
+                    ]
+                ),
+            )
+
+            return
+
+        page = session["page"]
+
+        if data == "page:next":
+
+            page += 1
+
+        else:
+
+            page = max(
+                1,
+                page - 1,
+            )
+
+        await fetch_and_show_games(
+            query,
+            title=session["title"],
+            year=session["year"],
+            genre=session["genre"],
+            platform=session["platform"],
+            popular=session["popular"],
+            page=page,
+        )
+
+        return
+
+    # -----------------------------
+    # Back to games
+    # -----------------------------
+
+    if data == "back_games":
+
+        session = sessions.get(
+            user_id
+        )
+
+        if not session:
+
+            await show_discover(
+                query
+            )
+
+            return
+
+        await fetch_and_show_games(
+            query,
+            title=session["title"],
+            year=session["year"],
+            genre=session["genre"],
+            platform=session["platform"],
+            popular=session["popular"],
+            page=session["page"],
+        )
+
+        return
+
+
+# =========================================================
+# Start from callback
+# =========================================================
+
+async def start_from_query(
+    query,
+):
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🎮 کشف بازی‌ها",
+                callback_data="discover",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔥 محبوب‌ترین‌ها",
+                callback_data="popular",
+            ),
+            InlineKeyboardButton(
+                "📅 بازی‌های ۲۰۲۶",
+                callback_data="year:2026",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🎯 انتخاب ژانر",
+                callback_data="genres",
+            ),
+            InlineKeyboardButton(
+                "💻 انتخاب پلتفرم",
+                callback_data="platforms",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "❤️ علاقه‌مندی‌ها",
+                callback_data="favorites",
+            )
+        ],
+    ]
+
+    await query.edit_message_text(
+        "🎮 <b>Game Discovery Agent</b>\n\n"
+        "یک گزینه را انتخاب کن:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
+        ),
+    )
+
+
+# =========================================================
+# Notification checker
+# =========================================================
+
+async def check_release_notifications(
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    today = datetime.now().date()
+
+    rows = get_followed_games()
+
+    for row in rows:
+
+        release_date = row["release_date"]
+
+        if not release_date:
+            continue
+
+        try:
+
+            release = datetime.strptime(
+                release_date,
+                "%Y-%m-%d",
+            ).date()
+
+        except ValueError:
+
+            continue
+
+        if release > today:
+            continue
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=row["telegram_id"],
+                text=(
+                    "🔔 <b>بازی منتشر شد!</b>\n\n"
+                    f"🎮 <b>{row['game_name']}</b>\n\n"
+                    f"📅 تاریخ انتشار: "
+                    f"{release_date}"
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+
+            mark_notified(
+                row["id"]
+            )
+
+        except Exception as error:
+
+            print(
+                "NOTIFICATION ERROR:",
+                error,
+            )
+
+
+# =========================================================
+# Error Handler
+# =========================================================
+
+async def error_handler(
+    update,
+    context,
+):
+
+    print(
+        "BOT ERROR:",
+        context.error,
+    )
 
 
 # =========================================================
@@ -639,75 +1410,58 @@ async def handle_message(
 
 def main():
 
+    global game_service
+
     if not TELEGRAM_BOT_TOKEN:
 
         raise ValueError(
-            "TELEGRAM_BOT_TOKEN "
-            "در فایل .env تنظیم نشده است."
+            "TELEGRAM_BOT_TOKEN تنظیم نشده است."
         )
+
+    game_service = GameService()
 
     init_database()
 
-    app = (
-        Application.builder()
+    application = (
+        Application
+        .builder()
         .token(TELEGRAM_BOT_TOKEN)
         .build()
     )
 
-    # /start
-    app.add_handler(
+    application.add_handler(
         CommandHandler(
             "start",
             start,
         )
     )
 
-    # صفحه‌بندی دسته‌ها
-    app.add_handler(
+    application.add_handler(
         CallbackQueryHandler(
-            category_page,
-            pattern=r"^catpage:",
+            callback_handler
         )
     )
 
-    # انتخاب دسته
-    app.add_handler(
-        CallbackQueryHandler(
-            category_selected,
-            pattern=r"^genre:",
-        )
+    application.add_error_handler(
+        error_handler
     )
 
-    # برگشت به دسته‌ها
-    app.add_handler(
-        CallbackQueryHandler(
-            back_to_categories,
-            pattern=r"^action:categories$",
-        )
-    )
+    # هر 6 ساعت وضعیت اعلان‌ها را بررسی می‌کند.
+    if application.job_queue:
 
-    # انتخاب بازی دیگر
-    app.add_handler(
-        CallbackQueryHandler(
-            choose_another_game,
-            pattern=r"^action:new_game$",
+        application.job_queue.run_repeating(
+            check_release_notifications,
+            interval=21600,
+            first=30,
         )
-    )
-
-    # پیام‌های متنی
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_message,
-        )
-    )
 
     print(
-        "🤖 Game Agent Bot is running...",
-        flush=True,
+        "🤖 Game Discovery Agent is running..."
     )
 
-    app.run_polling()
+    application.run_polling(
+        drop_pending_updates=True
+    )
 
 
 if __name__ == "__main__":
