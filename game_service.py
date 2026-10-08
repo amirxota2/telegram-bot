@@ -25,6 +25,7 @@ GENRE_MAP = {
     8: "side-scroller", # پلتفرمر
     32: "pixel",        # ایندی
     33: "2d",           # آرکید
+  
 }
  
 # FreeToGame فقط بازی‌های PC و مرورگر داره
