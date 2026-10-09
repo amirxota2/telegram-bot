@@ -251,17 +251,19 @@ def _fetch_games(query: str, params=()):
 
 
 def get_games(page: int = 1, limit: int = 50):
+    """Return a shuffled discovery list; popular games use their own ranking."""
     page = max(int(page), 1)
     limit = max(min(int(limit), 100), 1)
     offset = (page - 1) * limit
     return _fetch_games(
         """
         SELECT * FROM games
-        ORDER BY COALESCE(rating, 0) DESC, name COLLATE NOCASE ASC
+        ORDER BY RANDOM()
         LIMIT ? OFFSET ?
         """,
         (limit, offset),
     )
+
 
 
 def search_games(query: str, limit: int = 50):
@@ -294,15 +296,29 @@ def get_popular_games(limit: int = 50):
 
 
 def get_games_by_year(year: int, limit: int = 50):
-    return _fetch_games(
-        """
-        SELECT * FROM games
-        WHERE substr(release_date, 1, 4) = ?
-        ORDER BY COALESCE(rating, 0) DESC, name COLLATE NOCASE ASC
-        LIMIT ?
-        """,
-        (str(int(year)), max(min(int(limit), 100), 1)),
+    """Filter on the year parsed from several common release-date formats."""
+    import re
+
+    requested_year = int(year)
+    all_games = _fetch_games(
+        "SELECT * FROM games WHERE release_date IS NOT NULL AND TRIM(release_date) != ''"
     )
+    matches = []
+    for game in all_games:
+        value = str(game.get("release_date") or "").strip()
+        match = re.search(r"(?<!\d)(?:19|20|21)\d{2}(?!\d)", value)
+        if match and int(match.group(0)) == requested_year:
+            matches.append(game)
+    matches.sort(
+        key=lambda item: (
+            item.get("rating") is not None,
+            item.get("rating") or 0,
+            str(item.get("name") or "").casefold(),
+        ),
+        reverse=True,
+    )
+    return matches[:max(min(int(limit), 100), 1)]
+
 
 
 def get_games_by_genre(genre: str, limit: int = 50):
@@ -361,15 +377,49 @@ def get_upcoming_games(limit: int = 50):
 
 
 def get_available_years():
-    games = _fetch_games("SELECT release_date FROM games WHERE release_date IS NOT NULL AND release_date != ''")
+    """Read only release_date; do not convert a partial row into a full game."""
+    import re
+
+    connection = get_connection()
+    try:
+        rows = connection.execute(
+            "SELECT release_date FROM games WHERE release_date IS NOT NULL AND TRIM(release_date) != ''"
+        ).fetchall()
+    finally:
+        connection.close()
+
     years = set()
-    for game in games:
-        value = str(game.get("release_date") or "")
-        match = __import__("re").match(r"(\d{4})", value)
+    for row in rows:
+        value = str(row["release_date"] or "").strip()
+        match = re.search(r"(?<!\d)(?:19|20|21)\d{2}(?!\d)", value)
         if match:
-            years.add(int(match.group(1)))
+            years.add(int(match.group(0)))
     return sorted(years, reverse=True)
 
+
+
+def get_available_genres():
+    """Extract genres from each game's JSON list without requiring a name column."""
+    connection = get_connection()
+    try:
+        rows = connection.execute("SELECT genres FROM games").fetchall()
+    finally:
+        connection.close()
+
+    genres = set()
+    for row in rows:
+        try:
+            values = json.loads(row["genres"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            values = []
+        if isinstance(values, str):
+            values = [values]
+        for value in values if isinstance(values, list) else []:
+            if isinstance(value, dict):
+                value = value.get("name") or ""
+            if isinstance(value, str) and value.strip():
+                genres.add(value.strip())
+    return sorted(genres, key=str.casefold)
 
 def get_available_platforms():
     connection = get_connection()
@@ -558,7 +608,7 @@ def row_to_game(row):
 
     game["genre"] = game["genres"]
     game["platform"] = game["platforms"]
-    game["title"] = game["name"]
+    game["title"] = game.get("name") or ""
     game["thumbnail"] = game.get("cover_url") or ""
     game["game_url"] = game.get("url") or ""
     game["summary"] = game.get("short_description") or game.get("description") or ""

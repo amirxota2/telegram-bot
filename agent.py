@@ -55,8 +55,8 @@ class GameAgent:
 4. درباره فضای بازی فقط از روی توضیحات موجود صحبت کن.
 5. اگر داستان در توضیحات وجود داشت، به آن اشاره کن.
 6. متن کوتاه و خوانا باشد.
-7. فارسی روان باشد.
-8. نام بازی و اطلاعات اصلی را تغییر نده.
+7. متن را با املای صحیح فارسی، نیم‌فاصله‌های مناسب و نشانه‌گذاری خوانا بنویس.
+8. نام بازی و اطلاعات اصلی را تغییر نده.\n9. متن برای مخاطبان عمومی است؛ مخاطب را با «تو» خطاب نکن و به اطلاعات شخصی کاربر اشاره نکن.
 """
 
         try:
@@ -79,3 +79,32 @@ class GameAgent:
             logger.exception("AI description failed: %s", exc)
 
         return description or f"{title} یک بازی در سبک {genre_text} است."
+    def answer_question(self, question: str) -> str | None:
+        """Answer a general game-related question when an AI provider is configured."""
+        if not self.enabled or not self.client:
+            return None
+        prompt = f"""
+به زبان فارسی به پرسش کاربر درباره بازی‌های ویدیویی پاسخ بده.
+پرسش: {question}
+
+قواعد:
+- اگر درباره بازی مشخصی سؤال شده، فقط اطلاعاتی را بگو که از دانسته‌های قابل اتکایت داری.
+- تاریخ انتشار، قیمت، نسخه‌های جدید و جزئیات روز را حدس نزن؛ اگر مطمئن نیستی صریح بگو.
+- برای درخواست پیشنهاد بازی، سبک، پلتفرم و سلیقه کاربر را در نظر بگیر.
+- پاسخ خوانا و مفید باشد و در صورت نیاز نام بازی‌ها را انگلیسی نگه دار.
+- اگر سؤال خارج از حوزه بازی است، کوتاه توضیح بده که این ربات برای کشف و اطلاعات بازی طراحی شده است.
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model=QWEN_MODEL,
+                messages=[
+                    {"role": "system", "content": "تو دستیار فارسی‌زبان متخصص بازی‌های ویدیویی هستی."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.35,
+            )
+            answer = response.choices[0].message.content
+            return answer.strip() if answer else None
+        except Exception as exc:
+            logger.exception("General game question failed: %s", exc)
+            return None
